@@ -1,0 +1,9 @@
+[node]
+url = "https://rpc.quai.network/cyprus1/"
+
+[database]
+dsn = "postgresql://postgres:1234@localhost:5432/quai?connect_timeout=100&sslmode=disable&TimeZone=UTC"
+
+[sync]
+batch_size = 10
+debug_mode = false
