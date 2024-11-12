@@ -32,6 +32,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		log.Println("收到中断信号，正在关闭...")
 		cancel()
 	}()
 

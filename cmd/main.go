@@ -61,7 +61,7 @@ func runCmd(_ *cobra.Command, _ []string) error {
 	go func() {
 		// 等待中断信号
 		<-sigCh
-		fmt.Println("\n收到中断信号，正在关闭...")
+		log.Println("收到中断信号，正在关闭...")
 		cancel()
 	}()
 

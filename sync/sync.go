@@ -83,8 +83,8 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 
 	defer func() {
 		close(bs.taskChan)   // 关闭任务通道
-		<-done               // 等待结果处理协程完成
 		close(bs.resultChan) // 关闭结果通道
+		<-done               // 等待结果处理协程完成
 	}()
 
 	// 启动工作协程池
@@ -162,14 +162,14 @@ func (bs *BlockSync) worker(ctx context.Context) {
 					delay = baseDelay * time.Duration(1<<uint(attempt))
 				}
 
-				log.Printf("Retrying block %d (attempt %d) after %v delay",
-					blockNum, attempt+1, delay)
-
 				select {
 				case <-time.After(delay):
 				case <-ctx.Done():
 					return
 				}
+
+				log.Printf("Retrying block %d (attempt %d) after %v delay",
+					blockNum, attempt+1, delay)
 			}
 
 			select {
@@ -177,7 +177,10 @@ func (bs *BlockSync) worker(ctx context.Context) {
 				return
 			default:
 				blockData, stats, err := bs.syncBlock(ctx, blockNum)
-				if err != nil && err != context.Canceled {
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
 					log.Printf("Failed to sync block %d (attempt %d): %v",
 						blockNum, attempt+1, err)
 					attempt++
