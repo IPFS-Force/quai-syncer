@@ -1,8 +1,9 @@
-package sync
+package dal
 
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -24,20 +25,24 @@ func NewDatabase(dsn string) (*Database, error) {
 		return nil, fmt.Errorf("failed to connect database: %v", err)
 	}
 
-	// 自动迁移
+	database := &Database{db: db}
+
+	// 执行数据迁移
 	if err := db.AutoMigrate(&Block{}); err != nil {
-		return nil, fmt.Errorf("failed to migrate database: %v", err)
-	}
-	if err = db.AutoMigrate(&Transaction{}); err != nil {
-		return nil, fmt.Errorf("failed to migrate database: %v", err)
+		return nil, fmt.Errorf("failed to migrate block table: %v", err)
 	}
 
-	return &Database{db: db}, nil
+	// 自动迁移 Transaction 表
+	if err = db.AutoMigrate(&Transaction{}); err != nil {
+		return nil, fmt.Errorf("failed to migrate transaction table: %v", err)
+	}
+
+	return database, nil
 }
 
 func (d *Database) GetLatestSyncedBlock() (uint64, error) {
 	var block Block
-	result := d.db.Order("number desc").First(&block)
+	result := d.db.Select("number").Order("number desc").First(&block)
 	if result.Error == gorm.ErrRecordNotFound {
 		return 0, nil
 	}
@@ -50,8 +55,11 @@ func (d *Database) GetLatestSyncedBlock() (uint64, error) {
 // SaveBlock 保存区块和交易数据
 func (d *Database) SaveBlock(block *Block) error {
 	return d.db.Transaction(func(tx *gorm.DB) error {
+		// 设置创建时间
+		block.CreatedAt = time.Now()
+
 		// 保存区块时忽略 Transactions 关联
-		if err := tx.Omit("Transactions").Create(block).Error; err != nil {
+		if err := tx.Create(block).Error; err != nil {
 			return fmt.Errorf("failed to save block: %v", err)
 		}
 

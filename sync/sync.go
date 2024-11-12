@@ -7,16 +7,18 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	"quai-sync/dal"
 	"time"
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/quaiclient/ethclient"
+	"github.com/shopspring/decimal"
 )
 
 type BlockSync struct {
 	client      *ethclient.Client
-	db          *Database
+	db          *dal.Database
 	debug       bool
 	workerCount int             // 工作协程数量
 	taskChan    chan uint64     // 任务通道
@@ -26,7 +28,7 @@ type BlockSync struct {
 // 同步结果
 type syncResult struct {
 	blockNum  uint64
-	blockData *Block
+	blockData *dal.Block
 	stats     BlockStats
 	err       error
 }
@@ -46,7 +48,7 @@ func NewBlockSync(nodeURL string, dbURL string, debug bool, workerCount int) (*B
 	}
 
 	// 连接数据库
-	db, err := NewDatabase(dbURL)
+	db, err := dal.NewDatabase(dbURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect database: %v", err)
 	}
@@ -94,7 +96,7 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 
 	// 启动结果处理协程
 	resultMap := make(map[uint64]bool)
-	blockDataMap := make(map[uint64]*Block)
+	blockDataMap := make(map[uint64]*dal.Block)
 	nextBlockToConfirm := lastSynced + 1
 
 	go func() {
@@ -213,7 +215,7 @@ func (bs *BlockSync) worker(ctx context.Context) {
 }
 
 // syncBlock 同步单个区块数据
-func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*Block, BlockStats, error) {
+func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block, BlockStats, error) {
 	var stats BlockStats
 
 	block, err := bs.client.BlockByNumber(ctx, new(big.Int).SetUint64(blockNum))
@@ -224,19 +226,19 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*Block, Bl
 		return nil, stats, fmt.Errorf("failed to get block %d: %v", blockNum, err)
 	}
 
-	blockData := &Block{
-		Hash:              block.Hash().Hex(),
+	blockData := &dal.Block{
 		Number:            block.NumberU64(common.ZONE_CTX),
+		Hash:              block.Hash().Hex(),
 		ParentHash:        block.ParentHash(common.ZONE_CTX).Hex(),
-		Time:              block.Time(),
 		Difficulty:        block.Difficulty().String(),
 		PrimaryCoinbase:   block.PrimaryCoinbase().Hex(),
 		Location:          locationToString(block.Location()),
 		Timestamp:         time.Unix(int64(block.Time()), 0),
 		PrimeTerminusHash: block.PrimeTerminusHash().Hex(),
+		// CreatedAt 会在保存时自动设置
 	}
 
-	txs := make([]Transaction, 0)
+	txs := make([]dal.Transaction, 0)
 
 	// 处理普通交易中的coinbase交易
 	for _, tx := range block.Transactions() {
@@ -246,11 +248,11 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*Block, Bl
 			continue
 		}
 
-		txs = append(txs, Transaction{
+		txs = append(txs, dal.Transaction{
 			Hash:            tx.Hash().Hex(),
 			BlockNumber:     block.NumberU64(common.ZONE_CTX),
 			To:              tx.To().Hex(),
-			Value:           tx.Value().String(),
+			Value:           decimal.NewFromBigInt(tx.Value(), 0),
 			Timestamp:       time.Unix(int64(block.Time()), 0),
 			EtxType:         tx.EtxType(),
 			OriginatingHash: tx.OriginatingTxHash().Hex(),
@@ -268,11 +270,11 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*Block, Bl
 		// 打印coinbase交易详情
 		bs.printTxDetails(tx, block.NumberU64(common.ZONE_CTX), block.Location())
 
-		txs = append(txs, Transaction{
+		txs = append(txs, dal.Transaction{
 			Hash:            tx.Hash().Hex(),
 			BlockNumber:     block.NumberU64(common.ZONE_CTX),
 			To:              tx.To().Hex(),
-			Value:           tx.Value().String(),
+			Value:           decimal.NewFromBigInt(tx.Value(), 0),
 			Timestamp:       time.Unix(int64(block.Time()), 0),
 			EtxType:         tx.EtxType(),
 			OriginatingHash: tx.OriginatingTxHash().Hex(),
