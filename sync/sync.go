@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/big"
@@ -78,6 +79,14 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 		return err
 	}
 
+	done := make(chan struct{})
+
+	defer func() {
+		close(bs.taskChan)   // 关闭任务通道
+		<-done               // 等待结果处理协程完成
+		close(bs.resultChan) // 关闭结果通道
+	}()
+
 	// 启动工作协程池
 	for i := 0; i < bs.workerCount; i++ {
 		go bs.worker(ctx)
@@ -87,7 +96,6 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 	resultMap := make(map[uint64]bool)
 	blockDataMap := make(map[uint64]*Block)
 	nextBlockToConfirm := lastSynced + 1
-	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
@@ -126,16 +134,11 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 	for i := lastSynced + 1; i <= latestBlock; i++ {
 		select {
 		case <-ctx.Done():
-			log.Printf("Syncing blocks interrupted")
+			log.Printf("BlockSync SyncBlocks: Syncing blocks interrupted")
 			return ctx.Err()
 		case bs.taskChan <- i:
 		}
 	}
-
-	// 关闭任务通道
-	close(bs.taskChan)
-	<-done
-	close(bs.resultChan)
 
 	return nil
 }
@@ -174,7 +177,7 @@ func (bs *BlockSync) worker(ctx context.Context) {
 				return
 			default:
 				blockData, stats, err := bs.syncBlock(ctx, blockNum)
-				if err != nil {
+				if err != nil && err != context.Canceled {
 					log.Printf("Failed to sync block %d (attempt %d): %v",
 						blockNum, attempt+1, err)
 					attempt++
@@ -212,6 +215,9 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*Block, Bl
 
 	block, err := bs.client.BlockByNumber(ctx, new(big.Int).SetUint64(blockNum))
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, stats, err
+		}
 		return nil, stats, fmt.Errorf("failed to get block %d: %v", blockNum, err)
 	}
 
@@ -286,9 +292,10 @@ func (bs *BlockSync) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("BlockSync Ticker: Syncing blocks interrupted")
 			return ctx.Err()
 		case <-ticker.C:
-			log.Printf("哈哈哈哈哈哈哈Syncing blocks...")
+			log.Printf("BlockSync Ticker: Syncing blocks...")
 			if err := bs.SyncBlocks(ctx); err != nil {
 				log.Printf("Sync error: %v", err)
 			}

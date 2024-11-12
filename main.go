@@ -10,6 +10,10 @@ import (
 	"quai-sync/sync"
 )
 
+func init() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+}
+
 func main() {
 	nodeURL := "https://rpc.quai.network/cyprus1/"
 	dbURL := "postgresql://postgres:1234@localhost:5432/quai?connect_timeout=100&sslmode=disable&TimeZone=UTC"

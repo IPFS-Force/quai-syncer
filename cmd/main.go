@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"quai-sync/config"
 	"quai-sync/sync"
+	"quai-sync/utils"
 
 	"github.com/spf13/cobra"
 )
@@ -26,6 +28,7 @@ var (
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "config/config.toml", "配置文件路径")
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 }
 
 func runCmd(_ *cobra.Command, _ []string) error {
@@ -34,7 +37,7 @@ func runCmd(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("加载配置文件失败: %w", err)
 	}
-	fmt.Println(cfg)
+	utils.Json(cfg)
 
 	// 创建上下文和取消函数
 	ctx, cancel := context.WithCancel(context.Background())
@@ -63,7 +66,7 @@ func runCmd(_ *cobra.Command, _ []string) error {
 	}()
 
 	// 启动同步器
-	if err := syncer.Start(ctx); err != nil {
+	if err := syncer.Start(ctx); err != nil && err != context.Canceled {
 		return fmt.Errorf("启动同步器失败: %w", err)
 	}
 
