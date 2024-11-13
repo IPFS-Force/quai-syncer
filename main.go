@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"quai-sync/sync"
+
+	"gorm.io/gorm/logger"
 )
 
 func init() {
@@ -18,8 +21,7 @@ func main() {
 	nodeURL := "https://rpc.quai.network/cyprus1/"
 	dbURL := "postgresql://postgres:1234@localhost:5432/quai?connect_timeout=100&sslmode=disable&TimeZone=UTC"
 
-	// 创建同步器实例
-	syncer, err := sync.NewBlockSync(nodeURL, dbURL, false, 5)
+	syncer, err := sync.NewBlockSync(nodeURL, dbURL, false, 5, logger.Info)
 	if err != nil {
 		log.Fatalf("Failed to create block syncer: %v", err)
 	}
@@ -32,12 +34,12 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		log.Println("收到中断信号，正在关闭...")
+		log.Println("received interrupt signal, shutting down...")
 		cancel()
 	}()
 
 	// 启动同步器
-	if err := syncer.Start(ctx); err != nil && err != context.Canceled {
+	if err := syncer.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("Sync error: %v", err)
 	}
 }

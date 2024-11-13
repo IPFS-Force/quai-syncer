@@ -6,6 +6,7 @@ toolchain go1.23.2
 
 require (
 	github.com/dominant-strategies/go-quai v0.39.4
+	// github.com/GalaxiesCN/go-quai v0.39.4
 	github.com/spf13/cobra v1.7.0
 	github.com/spf13/viper v1.18.2
 	gorm.io/driver/postgres v1.5.9
@@ -96,3 +97,5 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/shopspring/decimal v1.3.1
 )
+
+replace github.com/dominant-strategies/go-quai => github.com/GalaxiesCN/go-quai v0.39.4

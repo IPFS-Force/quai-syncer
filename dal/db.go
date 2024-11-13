@@ -2,8 +2,6 @@ package dal
 
 import (
 	"fmt"
-	"log"
-	"time"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -15,11 +13,10 @@ type Database struct {
 	db *gorm.DB
 }
 
-func NewDatabase(dsn string) (*Database, error) {
+func NewDatabase(dsn string, logLevel logger.LogLevel) (*Database, error) {
 	config := &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
+		Logger: logger.Default.LogMode(logLevel),
 	}
-	log.Printf(dsn)
 	db, err := gorm.Open(postgres.Open(dsn), config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect database: %v", err)
@@ -27,12 +24,12 @@ func NewDatabase(dsn string) (*Database, error) {
 
 	database := &Database{db: db}
 
-	// 执行数据迁移
+	// 迁移 Block 表
 	if err := db.AutoMigrate(&Block{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate block table: %v", err)
 	}
 
-	// 自动迁移 Transaction 表
+	// 迁移 Transaction 表
 	if err = db.AutoMigrate(&Transaction{}); err != nil {
 		return nil, fmt.Errorf("failed to migrate transaction table: %v", err)
 	}
@@ -55,26 +52,24 @@ func (d *Database) GetLatestSyncedBlock() (uint64, error) {
 // SaveBlock 保存区块和交易数据
 func (d *Database) SaveBlock(block *Block) error {
 	return d.db.Transaction(func(tx *gorm.DB) error {
-		// 设置创建时间
-		block.CreatedAt = time.Now()
-
 		// 保存区块时忽略 Transactions 关联
 		if err := tx.Create(block).Error; err != nil {
 			return fmt.Errorf("failed to save block: %v", err)
 		}
 
-		// 单独处理交易数据
-		for _, transaction := range block.Transactions {
-			if err := tx.Clauses(clause.OnConflict{
-				Columns: []clause.Column{{Name: "hash"}},
-				DoUpdates: clause.Assignments(map[string]interface{}{
-					"confirmed_number": gorm.Expr("EXCLUDED.block_number"),
-					"value":            gorm.Expr("EXCLUDED.value"),
-					"timestamp":        gorm.Expr("EXCLUDED.timestamp"),
-				}),
-			}).Create(&transaction).Error; err != nil {
-				return fmt.Errorf("failed to save transaction: %v", err)
-			}
+		if len(block.Transactions) == 0 {
+			return nil
+		}
+
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "hash"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"confirmed_number": gorm.Expr("EXCLUDED.block_number"),
+				"value":            gorm.Expr("EXCLUDED.value"),
+				"timestamp":        gorm.Expr("EXCLUDED.timestamp"),
+			}),
+		}).CreateInBatches(block.Transactions, 100).Error; err != nil {
+			return fmt.Errorf("failed to save transactions: %v", err)
 		}
 
 		return nil

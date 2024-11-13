@@ -7,22 +7,24 @@ import (
 	"fmt"
 	"log"
 	"math/big"
-	"quai-sync/dal"
+	"sync"
 	"time"
+
+	"quai-sync/dal"
 
 	"github.com/dominant-strategies/go-quai/common"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/quaiclient/ethclient"
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm/logger"
 )
 
 type BlockSync struct {
 	client      *ethclient.Client
 	db          *dal.Database
 	debug       bool
-	workerCount int             // 工作协程数量
-	taskChan    chan uint64     // 任务通道
-	resultChan  chan syncResult // 结果通道
+	workerCount int            // 工作协程数量
+	workerWg    sync.WaitGroup // 用于跟踪 worker
 }
 
 // 同步结果
@@ -40,72 +42,74 @@ type BlockStats struct {
 }
 
 // NewBlockSync 创建新的同步器实例
-func NewBlockSync(nodeURL string, dbURL string, debug bool, workerCount int) (*BlockSync, error) {
+func NewBlockSync(nodeURL string, dbURL string, debugMode bool, batchSize int, logLevel logger.LogLevel) (*BlockSync, error) {
 	// 连接Quai节点
 	client, err := ethclient.Dial(nodeURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to quai node: %v", err)
 	}
 
-	// 连接数据库
-	db, err := dal.NewDatabase(dbURL)
+	db, err := dal.NewDatabase(dbURL, logLevel)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect database: %v", err)
+		return nil, fmt.Errorf("failed to initialize database: %v", err)
 	}
 
-	if workerCount <= 0 {
-		workerCount = 5 // 默认5个工作协程
+	if batchSize <= 0 {
+		batchSize = 5 // 默认5个工作协程
 	}
 
 	return &BlockSync{
 		client:      client,
 		db:          db,
-		debug:       debug,
-		workerCount: workerCount,
-		taskChan:    make(chan uint64, workerCount*2),     // 任务通道缓冲
-		resultChan:  make(chan syncResult, workerCount*2), // 结果通道缓冲
+		debug:       debugMode,
+		workerCount: batchSize,
+		workerWg:    sync.WaitGroup{},
 	}, nil
 }
 
 // SyncBlocks 同步区块数据
 func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
+	// 每次同步时创建新的通道
+	taskChan := make(chan uint64, bs.workerCount*2)
+	resultChan := make(chan syncResult, bs.workerCount*2)
+	done := make(chan struct{})
+
+	defer func() {
+		close(taskChan)    // 关闭任务管道
+		bs.workerWg.Wait() // 等待所有 worker 完成
+		close(resultChan)  // 关闭结果管道
+		<-done             // 等待结果处理协程完成
+	}()
+
 	// 获取当前链上最新区块
 	latestBlock, err := bs.client.BlockNumber(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get latest block number: %v", err)
 	}
 
-	// 获取数据库中最新同步的区块
+	// 获取数据库最新同步区块
 	lastSynced, err := bs.db.GetLatestSyncedBlock()
 	if err != nil {
 		return err
 	}
 
-	done := make(chan struct{})
-
-	defer func() {
-		close(bs.taskChan)   // 关闭任务通道
-		close(bs.resultChan) // 关闭结果通道
-		<-done               // 等待结果处理协程完成
-	}()
-
 	// 启动工作协程池
 	for i := 0; i < bs.workerCount; i++ {
-		go bs.worker(ctx)
+		bs.workerWg.Add(1)
+		go bs.worker(ctx, taskChan, resultChan)
 	}
 
-	// 启动结果处理协程
 	resultMap := make(map[uint64]bool)
 	blockDataMap := make(map[uint64]*dal.Block)
 	nextBlockToConfirm := lastSynced + 1
 
+	// 启动结果处理协程
 	go func() {
 		defer close(done)
-
-		for result := range bs.resultChan {
+		for result := range resultChan {
 			// 记录成功同步的区块
 			resultMap[result.blockNum] = true
-			blockDataMap[result.blockNum] = result.blockData // 存储区块数据
+			blockDataMap[result.blockNum] = result.blockData
 
 			// 按顺序确认已同步的区块
 			for resultMap[nextBlockToConfirm] {
@@ -113,11 +117,21 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 					// 处理已确认的区块数据，保存区块和交易数据
 					attempt := 0
 					for {
-						if err := bs.db.SaveBlock(blockData); err != nil {
-							log.Printf("Failed to save block %d (attempt %d): %v", nextBlockToConfirm, attempt+1, err)
-							attempt++
-							time.Sleep(time.Second * time.Duration(attempt)) // 递增重试间隔
-							continue
+						select {
+						case <-ctx.Done():
+							return
+						default:
+							if err := bs.db.SaveBlock(blockData); err != nil {
+								log.Printf("Failed to save block %d (attempt %d): %v", nextBlockToConfirm, attempt+1, err)
+								attempt++
+
+								select {
+								case <-ctx.Done():
+									return
+								case <-time.After(time.Second * time.Duration(attempt)): // 递增重试间隔
+								}
+								continue
+							}
 						}
 						break
 					}
@@ -138,27 +152,29 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 		case <-ctx.Done():
 			log.Printf("BlockSync SyncBlocks: Syncing blocks interrupted")
 			return ctx.Err()
-		case bs.taskChan <- i:
+		case taskChan <- i:
 		}
 	}
 
 	return nil
 }
 
-func (bs *BlockSync) worker(ctx context.Context) {
+// 修改 worker 方法，接收通道作为参数
+func (bs *BlockSync) worker(ctx context.Context, taskChan <-chan uint64, resultChan chan<- syncResult) {
+	defer bs.workerWg.Done()
+
 	baseDelay := 4 * time.Second
 	maxDelay := 32 * time.Second
 
-	for blockNum := range bs.taskChan {
+	for blockNum := range taskChan {
 		attempt := 0
 
 		for {
-			// 如果不是第一次尝试，则等待一段时间
 			if attempt > 0 {
-				// 计算指数退避延迟时间: baseDelay * 2^attempt，但不超过maxDelay
+				// 指数退避延迟时间: baseDelay * 2^attempt，但不超过maxDelay
 				// 防止attempt过大导致位移溢出
 				var delay time.Duration
-				if attempt >= 5 { // 2^5 = 32, 已达到最大延迟
+				if attempt >= 5 {
 					delay = maxDelay
 				} else {
 					delay = baseDelay * time.Duration(1<<uint(attempt))
@@ -191,7 +207,7 @@ func (bs *BlockSync) worker(ctx context.Context) {
 
 				// 成功同步，发送结果并退出循环
 				select {
-				case bs.resultChan <- syncResult{
+				case resultChan <- syncResult{
 					blockNum:  blockNum,
 					blockData: blockData,
 					stats:     stats,
@@ -226,6 +242,7 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 		return nil, stats, fmt.Errorf("failed to get block %d: %v", blockNum, err)
 	}
 
+	now := time.Now().Truncate(time.Second)
 	blockData := &dal.Block{
 		Number:            block.NumberU64(common.ZONE_CTX),
 		Hash:              block.Hash().Hex(),
@@ -235,7 +252,7 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 		Location:          locationToString(block.Location()),
 		Timestamp:         time.Unix(int64(block.Time()), 0),
 		PrimeTerminusHash: block.PrimeTerminusHash().Hex(),
-		// CreatedAt 会在保存时自动设置
+		CreatedAt:         now,
 	}
 
 	txs := make([]dal.Transaction, 0)
@@ -248,13 +265,19 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 			continue
 		}
 
+		addressType := uint8(1) // 默认是Quai交易
+		if tx.To().IsInQiLedgerScope() {
+			addressType = 0 // Qi交易
+		}
+
 		txs = append(txs, dal.Transaction{
+			CreatedAt:       now,
 			Hash:            tx.Hash().Hex(),
 			BlockNumber:     block.NumberU64(common.ZONE_CTX),
 			To:              tx.To().Hex(),
 			Value:           decimal.NewFromBigInt(tx.Value(), 0),
 			Timestamp:       time.Unix(int64(block.Time()), 0),
-			EtxType:         tx.EtxType(),
+			AddressType:     addressType,
 			OriginatingHash: tx.OriginatingTxHash().Hex(),
 			EtxIndex:        tx.ETXIndex(),
 		})
@@ -262,7 +285,7 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 
 	// 处理outboundEtxs中的coinbase交易
 	for _, tx := range block.OutboundEtxs() {
-		// 判断是否是coinbase交易
+		// 是否coinbase交易
 		if !types.IsCoinBaseTx(tx) {
 			continue
 		}
@@ -270,13 +293,19 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 		// 打印coinbase交易详情
 		bs.printTxDetails(tx, block.NumberU64(common.ZONE_CTX), block.Location())
 
+		addressType := uint8(1) // 默认是Quai交易
+		if tx.To().IsInQiLedgerScope() {
+			addressType = 0 // 是Qi交易
+		}
+
 		txs = append(txs, dal.Transaction{
+			CreatedAt:       now,
 			Hash:            tx.Hash().Hex(),
 			BlockNumber:     block.NumberU64(common.ZONE_CTX),
 			To:              tx.To().Hex(),
 			Value:           decimal.NewFromBigInt(tx.Value(), 0),
 			Timestamp:       time.Unix(int64(block.Time()), 0),
-			EtxType:         tx.EtxType(),
+			AddressType:     addressType,
 			OriginatingHash: tx.OriginatingTxHash().Hex(),
 			EtxIndex:        tx.ETXIndex(),
 		})
@@ -300,8 +329,10 @@ func (bs *BlockSync) Start(ctx context.Context) error {
 			log.Printf("BlockSync Ticker: Syncing blocks interrupted")
 			return ctx.Err()
 		case <-ticker.C:
-			log.Printf("BlockSync Ticker: Syncing blocks...")
 			if err := bs.SyncBlocks(ctx); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return err
+				}
 				log.Printf("Sync error: %v", err)
 			}
 		}
