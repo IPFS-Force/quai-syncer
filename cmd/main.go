@@ -47,6 +47,8 @@ func runCmd(_ *cobra.Command, _ []string) error {
 		cfg.Database.DSN,
 		cfg.Sync.DebugMode,
 		cfg.Sync.BatchSize,
+		cfg.Sync.IsFromConfig,
+		cfg.Sync.StartHeight,
 		cfg.GetLogLevel(),
 	)
 	if err != nil {

@@ -16,8 +16,10 @@ type Config struct {
 	} `mapstructure:"database"`
 
 	Sync struct {
-		BatchSize int  `mapstructure:"batch_size"`
-		DebugMode bool `mapstructure:"debug_mode"`
+		BatchSize    int  `mapstructure:"batch_size"`
+		DebugMode    bool `mapstructure:"debug_mode"`
+		IsFromConfig bool `mapstructure:"is_from_config"`
+		StartHeight  int  `mapstructure:"start_height"`
 	} `mapstructure:"sync"`
 }
 

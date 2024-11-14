@@ -19,9 +19,9 @@ func init() {
 
 func main() {
 	nodeURL := "https://rpc.quai.network/cyprus1/"
-	dbURL := "postgresql://postgres:1234@localhost:5432/quai?connect_timeout=100&sslmode=disable&TimeZone=UTC"
+	dbURL := "postgresql://postgres:123123@localhost:5432/quai?connect_timeout=100&sslmode=disable&TimeZone=UTC"
 
-	syncer, err := sync.NewBlockSync(nodeURL, dbURL, false, 5, logger.Info)
+	syncer, err := sync.NewBlockSync(nodeURL, dbURL, false, 5, true, 562484, logger.Info)
 	if err != nil {
 		log.Fatalf("Failed to create block syncer: %v", err)
 	}
