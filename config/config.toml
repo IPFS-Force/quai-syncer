@@ -10,3 +10,5 @@ log_level = "silent"
 [sync]
 batch_size = 10
 debug_mode = false
+is_from_config = false
+start_height = 100

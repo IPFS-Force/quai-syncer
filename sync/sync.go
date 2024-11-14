@@ -20,11 +20,13 @@ import (
 )
 
 type BlockSync struct {
-	client      *ethclient.Client
-	db          *dal.Database
-	debug       bool
-	workerCount int            // 工作协程数量
-	workerWg    sync.WaitGroup // 用于跟踪 worker
+	client       *ethclient.Client
+	db           *dal.Database
+	debug        bool
+	workerCount  int            // 工作协程数量
+	workerWg     sync.WaitGroup // 用于跟踪 worker
+	isFromConfig bool
+	startHeight  int
 }
 
 // 同步结果
@@ -42,7 +44,7 @@ type BlockStats struct {
 }
 
 // NewBlockSync 创建新的同步器实例
-func NewBlockSync(nodeURL string, dbURL string, debugMode bool, batchSize int, logLevel logger.LogLevel) (*BlockSync, error) {
+func NewBlockSync(nodeURL string, dbURL string, debugMode bool, batchSize int, isFromConfig bool, startHeight int, logLevel logger.LogLevel) (*BlockSync, error) {
 	// 连接Quai节点
 	client, err := ethclient.Dial(nodeURL)
 	if err != nil {
@@ -59,16 +61,18 @@ func NewBlockSync(nodeURL string, dbURL string, debugMode bool, batchSize int, l
 	}
 
 	return &BlockSync{
-		client:      client,
-		db:          db,
-		debug:       debugMode,
-		workerCount: batchSize,
-		workerWg:    sync.WaitGroup{},
+		client:       client,
+		db:           db,
+		debug:        debugMode,
+		workerCount:  batchSize,
+		workerWg:     sync.WaitGroup{},
+		isFromConfig: isFromConfig,
+		startHeight:  startHeight,
 	}, nil
 }
 
-// SyncBlocks 同步区块数据
-func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
+// SyncBlocksWithHeight 同步区块数据，区间为 startHeight 到 endHeight。
+func (bs *BlockSync) SyncBlocksWithHeight(ctx context.Context, startHeight, endHeight uint64) error {
 	// 每次同步时创建新的通道
 	taskChan := make(chan uint64, bs.workerCount*2)
 	resultChan := make(chan syncResult, bs.workerCount*2)
@@ -81,18 +85,6 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 		<-done             // 等待结果处理协程完成
 	}()
 
-	// 获取当前链上最新区块
-	latestBlock, err := bs.client.BlockNumber(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get latest block number: %v", err)
-	}
-
-	// 获取数据库最新同步区块
-	lastSynced, err := bs.db.GetLatestSyncedBlock()
-	if err != nil {
-		return err
-	}
-
 	// 启动工作协程池
 	for i := 0; i < bs.workerCount; i++ {
 		bs.workerWg.Add(1)
@@ -101,7 +93,7 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 
 	resultMap := make(map[uint64]bool)
 	blockDataMap := make(map[uint64]*dal.Block)
-	nextBlockToConfirm := lastSynced + 1
+	nextBlockToConfirm := uint64(startHeight)
 
 	// 启动结果处理协程
 	go func() {
@@ -147,7 +139,7 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 	}()
 
 	// 分发同步任务
-	for i := lastSynced + 1; i <= latestBlock; i++ {
+	for i := startHeight; i <= endHeight; i++ {
 		select {
 		case <-ctx.Done():
 			log.Printf("BlockSync SyncBlocks: Syncing blocks interrupted")
@@ -156,6 +148,29 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+// SyncBlocks 同步区块，区间为数据库最大高度+1到 quai 的最新高度。
+func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
+	// 获取当前链上最新区块
+	latestBlock, err := bs.client.BlockNumber(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get latest block number: %v", err)
+	}
+
+	// 获取数据库最新同步区块
+	lastSynced, err := bs.db.GetLatestSyncedBlock()
+	if err != nil {
+		return err
+	}
+
+	if err := bs.SyncBlocksWithHeight(ctx, lastSynced+1, latestBlock); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		log.Printf("Sync error: %v", err)
+	}
 	return nil
 }
 
@@ -323,6 +338,45 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 
 // Start 启动同步器
 func (bs *BlockSync) Start(ctx context.Context) error {
+	if bs.isFromConfig {
+		// 获取当前链上最新区块
+		latestBlock, err := bs.client.BlockNumber(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get latest block number: %v", err)
+		}
+
+		// 获取数据库最新同步区块
+		lastSynced, err := bs.db.GetLatestSyncedBlock()
+		if err != nil {
+			return err
+		}
+
+		nextSync := max(lastSynced+1, uint64(bs.startHeight))
+		// 如果此时 nextSync 大于 quai 最新高度，则等待 quai 跟上才同步。
+		for nextSync > latestBlock {
+			log.Printf("next block to sync is %d, latest block is %d, difference is %d, waiting for quai to catch up", nextSync, latestBlock, nextSync-latestBlock)
+			select {
+			case <-ctx.Done():
+				log.Printf("BlockSync Ticker: Syncing blocks interrupted")
+				return ctx.Err()
+			case <-time.After(20 * time.Second):
+			}
+
+			// 获取当前链上最新区块
+			latestBlock, err = bs.client.BlockNumber(ctx)
+			if err != nil {
+				return fmt.Errorf("failed to get latest block number: %v", err)
+			}
+		}
+
+		if err := bs.SyncBlocksWithHeight(ctx, nextSync, latestBlock); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			log.Printf("Sync error: %v", err)
+		}
+	}
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
