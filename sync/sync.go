@@ -261,7 +261,9 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 	for _, tx := range block.Transactions() {
 		// 只处理External类型的coinbase交易
 		if tx.Type() != types.ExternalTxType || tx.EtxType() != types.CoinbaseType {
-			stats.InternalTxCount++
+			if tx.Type() != types.ExternalTxType {
+				stats.InternalTxCount++
+			}
 			continue
 		}
 
@@ -282,6 +284,7 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 			EtxIndex:        tx.ETXIndex(),
 		})
 	}
+	stats.ConfirmedTxCount = uint(len(txs))
 
 	// 处理outboundEtxs中的coinbase交易
 	for _, tx := range block.OutboundEtxs() {
@@ -312,8 +315,8 @@ func (bs *BlockSync) syncBlock(ctx context.Context, blockNum uint64) (*dal.Block
 	}
 
 	blockData.Transactions = txs
-	stats.CoinbaseTxCount = uint(len(block.OutboundEtxs()))
-	stats.ConfirmedTxCount = uint(len(txs)) - stats.CoinbaseTxCount
+	stats.CoinbaseTxCount = uint(len(txs)) - stats.ConfirmedTxCount
+	//stats.ConfirmedTxCount = uint(len(txs)) - stats.CoinbaseTxCount
 
 	return blockData, stats, nil
 }
