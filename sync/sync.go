@@ -93,6 +93,13 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 		return err
 	}
 
+	nextBlockToConfirm := lastSynced + 1
+
+	// 直接返回
+	if nextBlockToConfirm >= latestBlock {
+		return nil
+	}
+
 	// 启动工作协程池
 	for i := 0; i < bs.workerCount; i++ {
 		bs.workerWg.Add(1)
@@ -101,7 +108,6 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 
 	resultMap := make(map[uint64]bool)
 	blockDataMap := make(map[uint64]*dal.Block)
-	nextBlockToConfirm := lastSynced + 1
 
 	// 启动结果处理协程
 	go func() {
@@ -332,6 +338,7 @@ func (bs *BlockSync) Start(ctx context.Context) error {
 			log.Printf("BlockSync Ticker: Syncing blocks interrupted")
 			return ctx.Err()
 		case <-ticker.C:
+			log.Println("sync ticker 5s")
 			if err := bs.SyncBlocks(ctx); err != nil {
 				if errors.Is(err, context.Canceled) {
 					return err
