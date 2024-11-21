@@ -69,18 +69,6 @@ func NewBlockSync(nodeURL string, dbURL string, debugMode bool, batchSize int, l
 
 // SyncBlocks 同步区块数据
 func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
-	// 每次同步时创建新的通道
-	taskChan := make(chan uint64, bs.workerCount*2)
-	resultChan := make(chan syncResult, bs.workerCount*2)
-	done := make(chan struct{})
-
-	defer func() {
-		close(taskChan)    // 关闭任务管道
-		bs.workerWg.Wait() // 等待所有 worker 完成
-		close(resultChan)  // 关闭结果管道
-		<-done             // 等待结果处理协程完成
-	}()
-
 	// 获取当前链上最新区块
 	latestBlock, err := bs.client.BlockNumber(ctx)
 	if err != nil {
@@ -96,9 +84,22 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 	nextBlockToConfirm := lastSynced + 1
 
 	// 直接返回
-	if nextBlockToConfirm >= latestBlock {
+	if nextBlockToConfirm > latestBlock {
+		log.Printf("nextBlockToConfirm %d > latestBlock %d", nextBlockToConfirm, latestBlock)
 		return nil
 	}
+
+	// 每次同步时创建新的通道
+	taskChan := make(chan uint64, bs.workerCount*2)
+	resultChan := make(chan syncResult, bs.workerCount*2)
+	done := make(chan struct{})
+
+	defer func() {
+		close(taskChan)    // 关闭任务管道
+		bs.workerWg.Wait() // 等待所有 worker 完成
+		close(resultChan)  // 关闭结果管道
+		<-done             // 等待结果处理协程完成
+	}()
 
 	// 启动工作协程池
 	for i := 0; i < bs.workerCount; i++ {
