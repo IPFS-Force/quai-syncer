@@ -75,6 +75,9 @@ func (bs *BlockSync) SyncBlocks(ctx context.Context) error {
 		return fmt.Errorf("failed to get latest block number: %v", err)
 	}
 
+	// 延迟20个高度进行同步方式，5分钟之内
+	latestBlock = latestBlock - 20
+
 	// 获取数据库最新同步区块
 	lastSynced, err := bs.db.GetLatestSyncedBlock()
 	if err != nil {
