@@ -1,9 +1,11 @@
 module quai-sync
 
-go 1.21.1
+go 1.23.1
+
+toolchain go1.23.4
 
 require (
-	github.com/dominant-strategies/go-quai v0.40.0
+	github.com/dominant-strategies/go-quai v0.41.1
 	github.com/spf13/cobra v1.7.0
 	github.com/spf13/viper v1.18.2
 	gorm.io/driver/postgres v1.5.9
@@ -95,4 +97,4 @@ require (
 	github.com/shopspring/decimal v1.3.1
 )
 
-replace github.com/dominant-strategies/go-quai => github.com/GalaxiesCN/go-quai v0.40.4
+replace github.com/dominant-strategies/go-quai => github.com/IPFS-Force/go-quai v0.41.1

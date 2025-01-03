@@ -1,7 +1,7 @@
 github.com/BurntSushi/toml v1.4.0 h1:kuoIxZQy2WRRk1pttg9asf+WVv6tWQuBNVmK8+nqPr0=
 github.com/BurntSushi/toml v1.4.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/GalaxiesCN/go-quai v0.40.4 h1:9E6YFqQOh5Wv0AkFSnQzp0pSMjYYPN1LKIP2lpugqSQ=
-github.com/GalaxiesCN/go-quai v0.40.4/go.mod h1:Awjwcu0t0nORGmWGCWgqecAjhOXa4hOJ+qGt6ygiC18=
+github.com/IPFS-Force/go-quai v0.41.1 h1:MMR6I0Kgb3aR6dy9NHncow2mlS45u7lNRYrKe8a6ebM=
+github.com/IPFS-Force/go-quai v0.41.1/go.mod h1:0UKwHPJBGtB7kPDTIAo2GR5xl/mqvsxFTScj9FqYXP8=
 github.com/benbjohnson/clock v1.3.5 h1:VvXlSJBzZpA/zum6Sj74hxwYI2DIxRWuNIoXAzHZz5o=
 github.com/benbjohnson/clock v1.3.5/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
